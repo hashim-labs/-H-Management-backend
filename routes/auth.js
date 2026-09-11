@@ -103,6 +103,29 @@ router.put("/password", authenticateToken, async (req, res) => {
   }
 });
 
+// Admin-only password reset. Keep the service key in backend environment variables.
+router.put("/users/:id/password", async (req, res) => {
+  try {
+    if (!process.env.ADMIN_API_KEY || req.headers["x-admin-key"] !== process.env.ADMIN_API_KEY) {
+      return res.status(403).json({ message: "Admin authorization required" });
+    }
+
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    user.password = await bcrypt.hash(newPassword, 12);
+    await user.save();
+    return res.json({ message: "Guest password reset successfully" });
+  } catch (err) {
+    return res.status(500).json({ message: "Unable to reset guest password" });
+  }
+});
+
 // backend/routes/user.js
 router.get("/profile", authenticateToken, async (req, res) => {
   try {
