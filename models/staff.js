@@ -11,6 +11,9 @@ const StaffSchema = new mongoose.Schema({
   hireDate: { type: Date, required: true },
   salary: { type: String, required: true },
   password: { type: String, required: true }, // Hashed password
+  role: { type: String, default: "staff" },
+  mustChangePassword: { type: Boolean, default: true },
+  credentialsSentAt: { type: Date },
 });
 
 module.exports = mongoose.model("Staff", StaffSchema);

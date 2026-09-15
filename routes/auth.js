@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/user");
+const Staff = require("../models/staff");
 const PendingRegistration = require("../models/pendingRegistration");
 const Booking = require("../models/booking");
 const crypto = require("crypto");
@@ -148,22 +149,27 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email: String(email || "").trim().toLowerCase() });
-    if (!user) return res.status(400).json({ message: "Invalid credentials" });
-    if (user.emailVerified === false) {
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+    const staff = user ? null : await Staff.findOne({ email: normalizedEmail });
+    if (!user && !staff) return res.status(400).json({ message: "Invalid credentials" });
+    const account = user || staff;
+    if (staff && staff.status !== "active") return res.status(403).json({ message: "This staff account is not active" });
+    if (user && user.emailVerified === false) {
       return res.status(403).json({ message: "Please verify your email before signing in", requiresVerification: true });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await bcrypt.compare(password, account.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, {
+    const token = jwt.sign({ id: account._id, email: account.email, role: staff ? "staff" : "user" }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
 
     // Convert user document to plain object and exclude password
-    const userData = user.toObject();
+    const userData = account.toObject();
     delete userData.password;
+    userData.role = staff ? "staff" : "user";
 
     // Return token and all user data
     res.json({

@@ -155,6 +155,31 @@ router.get("/all", async (req, res) => {
   }
 });
 
+// Add another room to an upcoming booking without re-entering guest details.
+router.put("/:id/rooms", authenticateToken, async (req, res) => {
+  try {
+    if (!req.user || req.user.role === "staff") return res.status(403).json({ message: "Guest authentication required" });
+    const { room, totalPrice } = req.body || {};
+    if (!room?.roomId || !room?.roomType || !Number.isFinite(Number(room.price))) {
+      return res.status(400).json({ message: "A valid room is required" });
+    }
+    const booking = await Booking.findOne({ _id: req.params.id, userId: req.user.id });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (booking.status === "cancelled" || new Date(booking.checkout) <= new Date()) {
+      return res.status(400).json({ message: "Only upcoming bookings can be updated" });
+    }
+
+    const existingRoom = booking.rooms.find((item) => item.roomId === String(room.roomId));
+    if (existingRoom) existingRoom.quantity += Number(room.quantity || 1);
+    else booking.rooms.push({ ...room, roomId: String(room.roomId), quantity: Number(room.quantity || 1), price: Number(room.price) });
+    booking.totalPrice = Number(totalPrice) || booking.rooms.reduce((sum, item) => sum + (Number(item.price) * Number(item.quantity)), 0);
+    await booking.save();
+    return res.json(await Booking.findById(booking._id).populate("userId", "email phone name"));
+  } catch (err) {
+    return res.status(500).json({ message: "Unable to update booking" });
+  }
+});
+
 // Get booking by ID
 router.get("/:id", authenticateToken, async (req, res) => {
   try {

@@ -1,7 +1,9 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const Staff = require("../models/staff");
+const { sendStaffCredentialsEmail } = require("../services/email");
 
 const router = express.Router();
 
@@ -26,12 +28,37 @@ const authenticateToken = (req, res, next) => {
 // Create staff
 router.post("/", async (req, res) => {
   try {
-    const { name, position, department, email, phone, status, shifts, hireDate, salary } = req.body;
-    const hashedPassword = await bcrypt.hash("pubgmaster", 10); // Default password
-    const staff = new Staff({ name, position, department, email, phone, status, shifts, hireDate, salary, password: hashedPassword });
+    if (process.env.ADMIN_API_KEY && req.headers["x-admin-key"] !== process.env.ADMIN_API_KEY) {
+      return res.status(403).json({ message: "Admin authorization required" });
+    }
+    const { name, position, department, email, phone, status, shifts, hireDate, salary, password } = req.body;
+    if (!name || !position || !department || !email || !phone || !hireDate || !salary) {
+      return res.status(400).json({ message: "Name, assignment, contact, hire date and salary are required" });
+    }
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const temporaryPassword = password || crypto.randomBytes(12).toString("base64url");
+    if (temporaryPassword.length < 8) return res.status(400).json({ message: "Password must be at least 8 characters" });
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 12);
+    const staff = new Staff({ name, position, department, email: normalizedEmail, phone, status, shifts, hireDate, salary, password: hashedPassword, mustChangePassword: true });
     await staff.save();
-    res.status(201).json(staff);
+    let emailSent = false;
+    try {
+      await sendStaffCredentialsEmail({
+        email: normalizedEmail, name, password: temporaryPassword, position, department,
+        shifts: shifts || "Day",
+        loginUrl: process.env.FRONTEND_URL || "http://localhost:3000/user-dashboard/login",
+      });
+      staff.credentialsSentAt = new Date();
+      await staff.save();
+      emailSent = true;
+    } catch (emailError) {
+      console.error("Staff credentials email error:", emailError);
+    }
+    const responseStaff = staff.toObject();
+    delete responseStaff.password;
+    res.status(201).json({ ...responseStaff, emailSent, temporaryPassword: emailSent ? undefined : temporaryPassword });
   } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ message: "A staff account already exists for this email" });
     res.status(500).json({ error: err.message });
   }
 });

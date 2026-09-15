@@ -79,4 +79,25 @@ async function sendGuestCredentialsEmail({ email, name, password, booking }) {
   });
 }
 
-module.exports = { sendVerificationEmail, sendBookingConfirmationEmail, sendGuestCredentialsEmail };
+async function sendStaffCredentialsEmail({ email, name, password, position, department, shifts, loginUrl }) {
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const transporter = getTransporter();
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject: "Your Hotel Elegance staff access details",
+    text: `Hello ${name}, your staff account is ready. Position: ${position}. Department: ${department}. Shift: ${shifts}. Login: ${loginUrl}. Email: ${email}. Temporary password: ${password}. Change it after your first sign-in.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;line-height:1.6;color:#243447;max-width:620px">
+        <h2 style="color:#9a6b19">Welcome to Hotel Elegance</h2>
+        <p>Hello ${name}, management has created your staff account.</p>
+        <p><strong>Assignment</strong><br>Position: ${position}<br>Department: ${department}<br>Shift: ${shifts}</p>
+        <p><strong>Login email:</strong> ${email}<br><strong>Temporary password:</strong> ${password}</p>
+        <p><a href="${loginUrl}" style="display:inline-block;padding:12px 18px;background:#9a6b19;color:#fff;text-decoration:none;border-radius:6px">Open staff login</a></p>
+        <p>For security, sign in and change your temporary password immediately. Never share these credentials.</p>
+      </div>
+    `,
+  });
+}
+
+module.exports = { sendVerificationEmail, sendBookingConfirmationEmail, sendGuestCredentialsEmail, sendStaffCredentialsEmail };
