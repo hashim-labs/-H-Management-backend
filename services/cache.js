@@ -2,16 +2,37 @@ const { createClient } = require("redis");
 
 let client;
 let connectionPromise;
+let redisUnavailable = false;
+
+const isLocalRedisUrl = (url) => /^redis:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(url);
 
 async function getClient() {
-  if (!process.env.REDIS_URL) return null;
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl || (process.env.NODE_ENV === "production" && isLocalRedisUrl(redisUrl)) || redisUnavailable) {
+    return null;
+  }
   if (!client) {
-    client = createClient({ url: process.env.REDIS_URL });
-    client.on("error", (error) => console.error("Redis client error:", error.message));
+    client = createClient({
+      url: redisUrl,
+      socket: {
+        connectTimeout: 3000,
+        reconnectStrategy: false,
+      },
+    });
+    client.on("error", (error) => {
+      console.error("Redis client error:", error.message);
+    });
   }
   if (!client.isOpen) {
-    connectionPromise = connectionPromise || client.connect();
-    await connectionPromise;
+    try {
+      connectionPromise = connectionPromise || client.connect();
+      await connectionPromise;
+    } catch (error) {
+      redisUnavailable = true;
+      connectionPromise = null;
+      console.error("Redis unavailable; continuing without cache:", error.message);
+      return null;
+    }
   }
   return client;
 }
