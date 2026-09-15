@@ -7,6 +7,12 @@ const userSchema = new mongoose.Schema({
     unique: true,
     lowercase: true,
   },
+  emailVerified: {
+    type: Boolean,
+    default: true,
+  },
+  verificationCodeHash: String,
+  verificationCodeExpiresAt: Date,
   password: {
     type: String,
     required: true,

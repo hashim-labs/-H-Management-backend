@@ -3,6 +3,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/user");
 const Booking = require("../models/booking");
+const crypto = require("crypto");
+const { sendVerificationEmail } = require("../services/email");
 
 const router = express.Router();
 
@@ -32,17 +34,87 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ message: "Email, password & phone required" });
     }
 
-    const existing = await User.findOne({ email });
+    const normalizedEmail = email.trim().toLowerCase();
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing) return res.status(400).json({ message: "User already exists" });
 
+    if (password.length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters" });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
+    const otp = String(crypto.randomInt(100000, 1000000));
 
-    const user = new User({ email, password: hashedPassword, phone, name });
+    const user = new User({
+      email: normalizedEmail,
+      password: hashedPassword,
+      phone,
+      name,
+      emailVerified: false,
+      verificationCodeHash: crypto.createHash("sha256").update(otp).digest("hex"),
+      verificationCodeExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
     await user.save();
+    try {
+      await sendVerificationEmail({ email: user.email, name: user.name, otp });
+    } catch (emailError) {
+      await User.deleteOne({ _id: user._id });
+      console.error("Verification email error:", emailError);
+      return res.status(503).json({ message: "Unable to send verification email. Please try again later." });
+    }
 
-    res.status(201).json({ message: "User registered successfully" });
+    res.status(201).json({ message: "Verification code sent to your email", email: user.email });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/verify-email", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const otp = String(req.body.otp || "").trim();
+    if (!email || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ message: "A valid six-digit verification code is required" });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "Account not found" });
+    if (user.emailVerified) return res.json({ message: "Email is already verified" });
+    if (!user.verificationCodeExpiresAt || user.verificationCodeExpiresAt < new Date()) {
+      return res.status(400).json({ message: "Verification code expired. Request a new code." });
+    }
+
+    const hash = crypto.createHash("sha256").update(otp).digest("hex");
+    if (hash !== user.verificationCodeHash) {
+      return res.status(400).json({ message: "Incorrect verification code" });
+    }
+
+    user.emailVerified = true;
+    user.verificationCodeHash = undefined;
+    user.verificationCodeExpiresAt = undefined;
+    await user.save();
+    return res.json({ message: "Email verified successfully" });
+  } catch (err) {
+    return res.status(500).json({ message: "Unable to verify email" });
+  }
+});
+
+router.post("/resend-verification", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "Account not found" });
+    if (user.emailVerified) return res.json({ message: "Email is already verified" });
+
+    const otp = String(crypto.randomInt(100000, 1000000));
+    user.verificationCodeHash = crypto.createHash("sha256").update(otp).digest("hex");
+    user.verificationCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await user.save();
+    await sendVerificationEmail({ email: user.email, name: user.name, otp });
+    return res.json({ message: "A new verification code was sent" });
+  } catch (err) {
+    console.error("Resend verification email error:", err);
+    return res.status(503).json({ message: "Unable to send verification email. Please try again later." });
   }
 });
 
@@ -51,8 +123,11 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: String(email || "").trim().toLowerCase() });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
+    if (user.emailVerified === false) {
+      return res.status(403).json({ message: "Please verify your email before signing in", requiresVerification: true });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });

@@ -4,6 +4,7 @@ const User = require("../models/user");
 const bcrypt = require("bcryptjs");
 const router = express.Router();
 const jwt = require("jsonwebtoken");
+const { sendBookingConfirmationEmail } = require("../services/email");
 
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -59,6 +60,7 @@ router.post("/book", authenticateToken, async (req, res) => {
           password: hashedPassword,
           phone: guestInfo.phone,
           name: `${guestInfo.firstName} ${guestInfo.lastName}`,
+          emailVerified: true,
           status: "reserved",
           checkIn: new Date(checkin),
           checkOut: new Date(checkout),
@@ -85,6 +87,17 @@ router.post("/book", authenticateToken, async (req, res) => {
 
     // Populate userId if present
     const populatedBooking = await Booking.findById(booking._id).populate("userId", "email phone name");
+    if (!req.user && guestInfo?.email) {
+      try {
+        await sendBookingConfirmationEmail({
+          email: guestInfo.email,
+          name: `${guestInfo.firstName} ${guestInfo.lastName}`,
+          booking: populatedBooking,
+        });
+      } catch (emailError) {
+        console.error("Booking confirmation email error:", emailError);
+      }
+    }
     res.status(201).json(populatedBooking);
   } catch (err) {
     res.status(500).json({ error: err.message });
