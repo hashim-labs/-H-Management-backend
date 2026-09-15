@@ -150,26 +150,31 @@ router.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     const normalizedEmail = String(email || "").trim().toLowerCase();
-    const user = await User.findOne({ email: normalizedEmail });
-    const staff = user ? null : await Staff.findOne({ email: normalizedEmail });
+    const [user, staff] = await Promise.all([
+      User.findOne({ email: normalizedEmail }),
+      Staff.findOne({ email: normalizedEmail }),
+    ]);
     if (!user && !staff) return res.status(400).json({ message: "Invalid credentials" });
-    const account = user || staff;
-    if (staff && staff.status !== "active") return res.status(403).json({ message: "This staff account is not active" });
-    if (user && user.emailVerified === false) {
+    // Staff credentials take precedence when the same email was previously
+    // used for a guest account, which lets management provision staff safely.
+    const staffMatches = staff && await bcrypt.compare(password, staff.password);
+    const userMatches = user && await bcrypt.compare(password, user.password);
+    const account = staffMatches ? staff : userMatches ? user : null;
+    const isStaff = account === staff;
+    if (!account) return res.status(400).json({ message: "Invalid credentials" });
+    if (isStaff && staff.status !== "active") return res.status(403).json({ message: "This staff account is not active" });
+    if (!isStaff && user.emailVerified === false) {
       return res.status(403).json({ message: "Please verify your email before signing in", requiresVerification: true });
     }
 
-    const isMatch = await bcrypt.compare(password, account.password);
-    if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
-
-    const token = jwt.sign({ id: account._id, email: account.email, role: staff ? "staff" : "user" }, process.env.JWT_SECRET, {
+    const token = jwt.sign({ id: account._id, email: account.email, role: isStaff ? "staff" : "user" }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
 
     // Convert user document to plain object and exclude password
     const userData = account.toObject();
     delete userData.password;
-    userData.role = staff ? "staff" : "user";
+    userData.role = isStaff ? "staff" : "user";
 
     // Return token and all user data
     res.json({
