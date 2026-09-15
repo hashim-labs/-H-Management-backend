@@ -4,7 +4,8 @@ const User = require("../models/user");
 const bcrypt = require("bcryptjs");
 const router = express.Router();
 const jwt = require("jsonwebtoken");
-const { sendBookingConfirmationEmail } = require("../services/email");
+const crypto = require("crypto");
+const { sendBookingConfirmationEmail, sendGuestCredentialsEmail } = require("../services/email");
 
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -43,6 +44,7 @@ router.post("/book", authenticateToken, async (req, res) => {
     }
 
     let userId = req.user ? req.user.id : null;
+    let generatedGuestPassword;
 
     // For guest users (no token or invalid token), create a new user in the User collection
     if (!req.user) {
@@ -51,12 +53,14 @@ router.post("/book", authenticateToken, async (req, res) => {
       }
 
       // Check if user already exists
-      let user = await User.findOne({ email: guestInfo.email });
+      const normalizedEmail = guestInfo.email.trim().toLowerCase();
+      let user = await User.findOne({ email: normalizedEmail });
       if (!user) {
         // Create new guest user
-        const hashedPassword = await bcrypt.hash("pubgmaster", 10);
+        generatedGuestPassword = crypto.randomBytes(9).toString("base64url");
+        const hashedPassword = await bcrypt.hash(generatedGuestPassword, 12);
         user = new User({
-          email: guestInfo.email,
+          email: normalizedEmail,
           password: hashedPassword,
           phone: guestInfo.phone,
           name: `${guestInfo.firstName} ${guestInfo.lastName}`,
@@ -90,10 +94,18 @@ router.post("/book", authenticateToken, async (req, res) => {
     if (!req.user && guestInfo?.email) {
       try {
         await sendBookingConfirmationEmail({
-          email: guestInfo.email,
+          email: guestInfo.email.trim().toLowerCase(),
           name: `${guestInfo.firstName} ${guestInfo.lastName}`,
           booking: populatedBooking,
         });
+        if (generatedGuestPassword) {
+          await sendGuestCredentialsEmail({
+            email: guestInfo.email.trim().toLowerCase(),
+            name: `${guestInfo.firstName} ${guestInfo.lastName}`,
+            password: generatedGuestPassword,
+            booking: populatedBooking,
+          });
+        }
       } catch (emailError) {
         console.error("Booking confirmation email error:", emailError);
       }

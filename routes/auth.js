@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/user");
+const PendingRegistration = require("../models/pendingRegistration");
 const Booking = require("../models/booking");
 const crypto = require("crypto");
 const { sendVerificationEmail } = require("../services/email");
@@ -45,7 +46,7 @@ router.post("/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const otp = String(crypto.randomInt(100000, 1000000));
 
-    const user = new User({
+    const pendingRegistration = new PendingRegistration({
       email: normalizedEmail,
       password: hashedPassword,
       phone,
@@ -54,16 +55,30 @@ router.post("/register", async (req, res) => {
       verificationCodeHash: crypto.createHash("sha256").update(otp).digest("hex"),
       verificationCodeExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
     });
-    await user.save();
+    await PendingRegistration.findOneAndUpdate(
+      { email: normalizedEmail },
+      {
+        $set: {
+          password: hashedPassword,
+          phone,
+          name,
+          verificationCodeHash: pendingRegistration.verificationCodeHash,
+          verificationCodeExpiresAt: pendingRegistration.verificationCodeExpiresAt,
+          createdAt: new Date(),
+        },
+        $setOnInsert: { email: normalizedEmail },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
     try {
-      await sendVerificationEmail({ email: user.email, name: user.name, otp });
+      await sendVerificationEmail({ email: normalizedEmail, name, otp });
     } catch (emailError) {
-      await User.deleteOne({ _id: user._id });
+      await PendingRegistration.deleteOne({ email: normalizedEmail });
       console.error("Verification email error:", emailError);
       return res.status(503).json({ message: "Unable to send verification email. Please try again later." });
     }
 
-    res.status(201).json({ message: "Verification code sent to your email", email: user.email });
+    res.status(201).json({ message: "Verification code sent to your email", email: normalizedEmail });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -77,22 +92,29 @@ router.post("/verify-email", async (req, res) => {
       return res.status(400).json({ message: "A valid six-digit verification code is required" });
     }
 
-    const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ message: "Account not found" });
-    if (user.emailVerified) return res.json({ message: "Email is already verified" });
-    if (!user.verificationCodeExpiresAt || user.verificationCodeExpiresAt < new Date()) {
+    const pendingRegistration = await PendingRegistration.findOne({ email });
+    if (!pendingRegistration) {
+      const existing = await User.findOne({ email });
+      if (existing?.emailVerified) return res.json({ message: "Email is already verified" });
+      return res.status(404).json({ message: "Registration request not found. Please register again." });
+    }
+    if (!pendingRegistration.verificationCodeExpiresAt || pendingRegistration.verificationCodeExpiresAt < new Date()) {
       return res.status(400).json({ message: "Verification code expired. Request a new code." });
     }
 
     const hash = crypto.createHash("sha256").update(otp).digest("hex");
-    if (hash !== user.verificationCodeHash) {
+    if (hash !== pendingRegistration.verificationCodeHash) {
       return res.status(400).json({ message: "Incorrect verification code" });
     }
 
-    user.emailVerified = true;
-    user.verificationCodeHash = undefined;
-    user.verificationCodeExpiresAt = undefined;
-    await user.save();
+    await User.create({
+      email: pendingRegistration.email,
+      password: pendingRegistration.password,
+      phone: pendingRegistration.phone,
+      name: pendingRegistration.name,
+      emailVerified: true,
+    });
+    await PendingRegistration.deleteOne({ _id: pendingRegistration._id });
     return res.json({ message: "Email verified successfully" });
   } catch (err) {
     return res.status(500).json({ message: "Unable to verify email" });
@@ -102,15 +124,18 @@ router.post("/verify-email", async (req, res) => {
 router.post("/resend-verification", async (req, res) => {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
-    const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ message: "Account not found" });
-    if (user.emailVerified) return res.json({ message: "Email is already verified" });
+    const pendingRegistration = await PendingRegistration.findOne({ email });
+    if (!pendingRegistration) {
+      const existing = await User.findOne({ email });
+      if (existing?.emailVerified) return res.json({ message: "Email is already verified" });
+      return res.status(404).json({ message: "Registration request not found. Please register again." });
+    }
 
     const otp = String(crypto.randomInt(100000, 1000000));
-    user.verificationCodeHash = crypto.createHash("sha256").update(otp).digest("hex");
-    user.verificationCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await user.save();
-    await sendVerificationEmail({ email: user.email, name: user.name, otp });
+    pendingRegistration.verificationCodeHash = crypto.createHash("sha256").update(otp).digest("hex");
+    pendingRegistration.verificationCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await pendingRegistration.save();
+    await sendVerificationEmail({ email: pendingRegistration.email, name: pendingRegistration.name, otp });
     return res.json({ message: "A new verification code was sent" });
   } catch (err) {
     console.error("Resend verification email error:", err);

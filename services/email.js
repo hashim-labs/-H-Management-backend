@@ -59,4 +59,24 @@ async function sendBookingConfirmationEmail({ email, name, booking }) {
   });
 }
 
-module.exports = { sendVerificationEmail, sendBookingConfirmationEmail };
+async function sendGuestCredentialsEmail({ email, name, password, booking }) {
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const transporter = getTransporter();
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject: "Your Hotel Elegance guest account",
+    text: `Hello ${name || "Guest"}, your guest account was created for booking ${booking._id}. Email: ${email}. Temporary password: ${password}. Please sign in and change it after your stay is arranged.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;line-height:1.6;color:#3c2a1e">
+        <h2>Your Hotel Elegance guest account</h2>
+        <p>Hello ${name || "Guest"}, we created an account so you can manage your reservation.</p>
+        <p><strong>Email:</strong> ${email}</p>
+        <p><strong>Temporary password:</strong> ${password}</p>
+        <p>Please sign in and change this password from your profile. Your booking reference is <strong>${booking._id}</strong>.</p>
+      </div>
+    `,
+  });
+}
+
+module.exports = { sendVerificationEmail, sendBookingConfirmationEmail, sendGuestCredentialsEmail };
