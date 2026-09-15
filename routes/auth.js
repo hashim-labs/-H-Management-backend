@@ -155,11 +155,14 @@ router.post("/login", async (req, res) => {
       Staff.findOne({ email: normalizedEmail }),
     ]);
     if (!user && !staff) return res.status(400).json({ message: "Invalid credentials" });
-    // Staff credentials take precedence when the same email was previously
-    // used for a guest account, which lets management provision staff safely.
+    // Select the account for the portal being used. This keeps duplicate
+    // guest/staff emails unambiguous while allowing each account to use its
+    // own password and login entry point.
     const staffMatches = staff && await bcrypt.compare(password, staff.password);
     const userMatches = user && await bcrypt.compare(password, user.password);
-    const account = staffMatches ? staff : userMatches ? user : null;
+    const account = req.body?.allowStaff === true
+      ? (staffMatches ? staff : userMatches ? user : null)
+      : (userMatches ? user : staffMatches ? staff : null);
     const isStaff = account === staff;
     if (!account) return res.status(400).json({ message: "Invalid credentials" });
     if (isStaff && staff.status !== "active") return res.status(403).json({ message: "This staff account is not active" });
