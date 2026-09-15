@@ -75,9 +75,31 @@ router.post("/book", authenticateToken, async (req, res) => {
       userId = user._id;
     }
 
+    let authenticatedGuestInfo;
+    if (req.user) {
+      const account = await User.findById(req.user.id).select("name email phone");
+      if (!account) return res.status(401).json({ error: "Authenticated account not found" });
+      const nameParts = String(account.name || "").trim().split(/\s+/);
+      authenticatedGuestInfo = {
+        title: guestInfo?.title || "Mr.",
+        firstName: nameParts[0] || "",
+        lastName: nameParts.slice(1).join(" "),
+        email: account.email,
+        phone: account.phone,
+        country: guestInfo?.country,
+        address: guestInfo?.address,
+        city: guestInfo?.city,
+        zipCode: guestInfo?.zipCode,
+        specialRequests: guestInfo?.specialRequests,
+        purposeOfStay: guestInfo?.purposeOfStay || "leisure",
+        identificationType: guestInfo?.identificationType,
+        identificationNumber: guestInfo?.identificationNumber,
+      };
+    }
+
     const bookingData = {
       userId,
-      guestInfo: req.user ? undefined : guestInfo,
+      guestInfo: req.user ? authenticatedGuestInfo : guestInfo,
       hotelId,
       checkin,
       checkout,
